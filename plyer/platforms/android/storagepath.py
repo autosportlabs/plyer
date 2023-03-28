@@ -3,18 +3,15 @@ Android Storage Path
 --------------------
 '''
 
-from os import listdir, access, R_OK
-from os.path import join
 from plyer.facades import StoragePath
-from jnius import autoclass
+from jnius import autoclass, cast
 from android import mActivity
 
-Environment = autoclass('android.os.Environment')
-Context = autoclass('android.content.Context')
+Environment = autoclass("android.os.Environment")
+Context = autoclass("android.content.Context")
 
 
 class AndroidStoragePath(StoragePath):
-
     def _get_home_dir(self):
         return Environment.getDataDirectory().getAbsolutePath()
 
@@ -25,17 +22,23 @@ class AndroidStoragePath(StoragePath):
         '''
         .. versionadded:: 1.4.0
         '''
-        # folder in /storage/ that is readable
-        # and is not internal SD card
         path = None
-        for folder in listdir('/storage'):
-            folder = join('/storage', folder)
-            if folder in self._get_external_storage_dir():
-                continue
-            if not access(folder, R_OK):
-                continue
-            path = folder
-            break
+        context = mActivity.getApplicationContext()
+        storage_manager = cast(
+            "android.os.storage.StorageManager",
+            context.getSystemService(Context.STORAGE_SERVICE),
+        )
+
+        if storage_manager is not None:
+            storage_volumes = storage_manager.getStorageVolumes()
+            for storage_volume in storage_volumes:
+                if storage_volume.isRemovable():
+                    try:
+                        directory = storage_volume.getDirectory()
+                    except AttributeError:
+                        directory = storage_volume.getPathFile()
+                    path = directory.getAbsolutePath()
+
         return path
 
     def _get_root_dir(self):
