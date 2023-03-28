@@ -43,7 +43,7 @@ using that result will use an incorrect one i.e. the default value of
 .. versionadded:: 1.4.0
 '''
 
-from os.path import join, basename
+from os.path import join
 from random import randint
 
 from android import activity, mActivity
