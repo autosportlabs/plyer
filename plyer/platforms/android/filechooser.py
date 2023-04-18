@@ -43,7 +43,8 @@ using that result will use an incorrect one i.e. the default value of
 .. versionadded:: 1.4.0
 '''
 
-from os.path import join
+import os
+from os.path import join, isfile
 from random import randint
 
 from android import activity, mActivity
@@ -168,7 +169,9 @@ class AndroidFileChooser(FileChooser):
         )
 
     def _save_file(self, **kwargs):
-        self._save_callback = kwargs.pop("callback")
+        self._handle_selection = kwargs.pop(
+            'on_selection', self._handle_selection
+        )
 
         title = kwargs.pop("title", None)
 
@@ -230,16 +233,14 @@ class AndroidFileChooser(FileChooser):
             self._handle_selection(selection)
 
         elif request_code == self.save_code:
-            uri = data.getData()
+            file_path = [self._resolve_uri(data.getData()), ]
 
-            with mActivity.getContentResolver().openFileDescriptor(
-                uri, "w"
-            ) as pfd:
-                with FileOutputStream(
-                    pfd.getFileDescriptor()
-                ) as fileOutputStream:
-                    # return value via callback
-                    self._save_callback(fileOutputStream)
+            if os.access(os.path.dirname(file_path[0]), os.W_OK) and isfile(file_path[0]):
+                os.remove(file_path[0])
+            else:
+                file_path = None
+
+            self._handle_selection(file_path)
 
     @staticmethod
     def _handle_external_documents(uri):
