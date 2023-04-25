@@ -44,10 +44,10 @@ using that result will use an incorrect one i.e. the default value of
 '''
 
 import os
-from os.path import join, isfile
+from os.path import join, basename, exists
 from random import randint
 
-from android import activity, mActivity
+from android import activity, mActivity, api_version
 from jnius import autoclass, cast, JavaException
 from plyer.facades import FileChooser
 from plyer import storagepath
@@ -65,6 +65,8 @@ VMedia = autoclass('android.provider.MediaStore$Video$Media')
 AMedia = autoclass('android.provider.MediaStore$Audio$Media')
 Files = autoclass('android.provider.MediaStore$Files')
 FileOutputStream = autoclass('java.io.FileOutputStream')
+FileUtils = autoclass('android.os.FileUtils')
+File = autoclass('java.io.File')
 
 
 class AndroidFileChooser(FileChooser):
@@ -143,7 +145,7 @@ class AndroidFileChooser(FileChooser):
             kwargs.pop("filters")[0] if "filters" in kwargs else ""
 
         # create Intent for opening
-        file_intent = Intent(Intent.ACTION_GET_CONTENT)
+        file_intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
         if not self.selected_mime_type or \
             type(self.selected_mime_type) != str or \
                 self.selected_mime_type not in self.mime_type:
@@ -170,35 +172,25 @@ class AndroidFileChooser(FileChooser):
 
     def _save_file(self, **kwargs):
         self._handle_selection = kwargs.pop(
-            'on_selection', self._handle_selection
+            "on_selection", self._handle_selection
         )
 
-        title = kwargs.pop("title", None)
-
-        self.selected_mime_type = \
-            kwargs.pop("filters")[0] if "filters" in kwargs else ""
-
-        file_intent = Intent(Intent.ACTION_CREATE_DOCUMENT)
-        if not self.selected_mime_type or \
-            type(self.selected_mime_type) != str or \
-                self.selected_mime_type not in self.mime_type:
-            file_intent.setType("*/*")
-        else:
-            file_intent.setType(self.mime_type[self.selected_mime_type])
-        file_intent.addCategory(
-            Intent.CATEGORY_OPENABLE
+        packageManager = mActivity.getPackageManager()
+        applicationInfo = packageManager.getApplicationInfo(
+            mActivity.getPackageName(), 0
         )
+        app_name = packageManager.getApplicationLabel(applicationInfo)
 
-        if title:
-            file_intent.putExtra(Intent.EXTRA_TITLE, title)
-
-        mActivity.startActivityForResult(
-            Intent.createChooser(file_intent, cast(
-                'java.lang.CharSequence',
-                String("FileChooser")
-            )),
-            self.save_code
+        documents_folder = join(
+            Environment.getExternalStorageDirectory().getPath(),
+            Environment.DIRECTORY_DOCUMENTS,
+            app_name,
         )
+        if not exists(documents_folder):
+            os.mkdir(documents_folder)
+
+        temp_file = join(documents_folder, "__temp_file__")
+        self._handle_selection([temp_file])
 
     def _on_activity_result(self, request_code, result_code, data):
         '''
@@ -229,18 +221,94 @@ class AndroidFileChooser(FileChooser):
 
             # return value to object
             self.selection = selection
-            # return value via callback
-            self._handle_selection(selection)
 
-        elif request_code == self.save_code:
-            file_path = [self._resolve_uri(data.getData()), ]
+            if api_version > 28:
+                filename = basename(selection[0])
+                cache_dir = str(
+                    mActivity.getApplicationContext()
+                    .getExternalCacheDir()
+                    .toString()
+                )
 
-            if os.access(os.path.dirname(file_path[0]), os.W_OK) and isfile(file_path[0]):
-                os.remove(file_path[0])
+                cache_file_loc = join(cache_dir, "FromSharedStorage")
+                if not exists(cache_file_loc):
+                    os.mkdir(cache_file_loc)
+
+                cache_file = join(cache_file_loc, filename)
+                if exists(cache_file):
+                    os.remove(cache_file)
+
+                context = mActivity.getApplicationContext()
+                cr = context.getContentResolver()
+
+                rs = cr.openInputStream(data.getData())
+                ws = FileOutputStream(cache_file)
+
+                FileUtils.copy(rs, ws)
+
+                ws.close()
+                rs.close()
+
+                # return value via callback
+                self._handle_selection([cache_file])
             else:
-                file_path = None
+                # return value via callback
+                self._handle_selection(selection)
 
-            self._handle_selection(file_path)
+    def _get_uri(self, shared_file):
+        MediaStoreMediaColumns = autoclass('android.provider.MediaStore$MediaColumns')
+
+        if type(shared_file) == str:
+            shared_file = shared_file
+            if 'file://' in shared_file or 'content://' in shared_file:
+                return None
+        else:
+            uri = cast('android.net.Uri',shared_file)
+            try:
+                if uri.getScheme().lower() == 'content':
+                    return uri
+                else:
+                    return None
+            except:
+                return None
+
+        file_name = basename(shared_file)
+        MIME_type = self.get_file_MIME_type(file_name)
+        path = shared_file.split('/')
+        if len(path) < 1:
+            return None
+        root = path[0]
+
+        self.selection = MediaStoreMediaColumns.DISPLAY_NAME+"=? AND " 
+        if api_version > 28:
+            location = ''
+            for d in path[:-1]:
+                location = join(location, d)
+            self.selection = self.selection +\
+                MediaStoreMediaColumns.RELATIVE_PATH+"=?"
+            self.args = [file_name, location+'/']
+        else:
+            self.selection = self.selection + MediaStoreMediaColumns.DATA+"=?"
+            self.args = [file_name, shared_file]
+
+        root_uri = self._get_root_uri(root, MIME_type)
+        context = mActivity.getApplicationContext()
+        cursor = context.getContentResolver().query(root_uri, None,
+                                                    self.selection,
+                                                    self.args, None)
+        fileUri = None
+        if cursor:
+            while cursor.moveToNext():
+                dn = MediaStoreMediaColumns.DISPLAY_NAME
+                index = cursor.getColumnIndex(dn)
+                fileName = cursor.getString(index)
+                if file_name == fileName:
+                    id_index = cursor.getColumnIndex(MediaStoreMediaColumns._ID)
+                    id = cursor.getLong(id_index)
+                    fileUri = ContentUris.withAppendedId(root_uri,id)
+                    break
+            cursor.close()
+        return fileUri
 
     @staticmethod
     def _handle_external_documents(uri):
