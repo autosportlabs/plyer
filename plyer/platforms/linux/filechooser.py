@@ -72,7 +72,8 @@ class SubprocessFileChooser:
 
     def _set_and_return_selection(self, value):
         self.selection = value
-        self._handle_selection(value)
+        if value:
+            self._handle_selection(value)
         return value
 
     def _split_output(self, out):

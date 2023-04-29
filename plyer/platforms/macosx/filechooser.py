@@ -109,7 +109,8 @@ class MacFileChooser:
                     filename.objectAtIndex_(x).UTF8String()
                     for x in range(filename.count())]
 
-        self._handle_selection(selection)
+        if selection:
+            self._handle_selection(selection)
 
         return selection
 

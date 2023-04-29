@@ -109,7 +109,8 @@ class Win32FileChooser:
                 except pywintypes.error as e:
                     # if canceled, it's not really an error
                     if not e.winerror:
-                        self._handle_selection(self.selection)
+                        if self.selection:
+                            self._handle_selection(self.selection)
                         return self.selection
                     raise
 
